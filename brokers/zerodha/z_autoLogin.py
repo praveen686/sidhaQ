@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-"""
-om geneshaya namaha
-siriQ - " Brief description of the script"
-@author: Praveen Ayyasola (www.siriQ.ai)
-@created: 16th Feb 2024
-@version: 1.0
+# # -*- coding: utf-8 -*-
+# """
+# om geneshaya namaha
+# sidhaQ - " Brief description of the script"
+# @author: Praveen Ayyasola (www.sidhaQ.ai)
+# @created: 16th Feb 2024
+# @version: 1.0
 
-"""
+# """
 
 # Imports
 import pyotp
@@ -25,19 +25,7 @@ logger = logging.getLogger(__name__)
 # Global path setup
 BASE_DIR = Path(__file__).resolve().parent
 
-"""Securely fetches and returns a configured KiteConnect instance."""
-dotenv_path = '/home/isoula/PycharmProjects/siriQ/.env'
-load_dotenv(dotenv_path=dotenv_path)
-api_key = os.getenv('ZERODHA_API_KEY')
-api_secret = os.getenv("ZERODHA_API_SECRET")
-zerodha_id = os.getenv("ZERODHA_ID")
-zerodha_password = os.getenv("ZERODHA_PASSWORD")
-totp_key = os.getenv("ZERODHA_TOTP_KEY")
-
 def autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key) -> KiteConnect:
-    """
-    Logs into Kite and returns a KiteConnect instance with improved error handling.
-    """
     try:
         totp = pyotp.TOTP(totp_key)
         twofa = totp.now()
@@ -47,7 +35,7 @@ def autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key) -> Ki
             twofa_url = "https://kite.zerodha.com/api/twofa"
             login_response = req_session.post(login_url, data={"user_id": zerodha_id, "password": zerodha_password,
                                                                "twofa_value": twofa})
-            login_response.raise_for_status()  # Raises an error for bad responses
+            login_response.raise_for_status()
 
             login_data = login_response.json()
             if 'data' not in login_data or 'request_id' not in login_data['data']:
@@ -57,7 +45,7 @@ def autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key) -> Ki
             request_id = login_data['data']['request_id']
             twofa_response = req_session.post(twofa_url, data={"user_id": zerodha_id, "request_id": request_id,
                                                                "twofa_value": twofa})
-            # twofa_response.raise_for_status()  # Raises an error for bad responses
+            twofa_response.raise_for_status()
 
             kite_login_url = f"https://kite.trade/connect/login?api_key={api_key}"
             zerodha_api_ssn = req_session.get(kite_login_url)
@@ -70,17 +58,84 @@ def autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key) -> Ki
             logger.info("KiteConnect session successfully established.")
             return kite
 
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error occurred. Please check your internet connection.")
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out. The server might be too slow or down.")
     except requests.exceptions.RequestException as e:
-        logger.error(f"Network error occurred: {e}")
-    except ValueError as e:
-        logger.error(f"Error processing login response: {e}")
+        logger.error(f"Unexpected network error occurred: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
     return None
 
 
-# To be run once only after 6AM the next day,
+# Load environment variables
+dotenv_path = '/home/isoula/PycharmProjects/sidhaQ/brokers/zerodha/.env'
+load_dotenv(dotenv_path=dotenv_path)
+
+# Retrieve credentials and TOTP key from environment variables
+api_key = os.getenv('ZERODHA_API_KEY')
+api_secret = os.getenv("ZERODHA_API_SECRET")
+zerodha_id = os.getenv("ZERODHA_ID")
+zerodha_password = os.getenv("ZERODHA_PASSWORD")
+totp_key = os.getenv("ZERODHA_TOTP_KEY")
+
+# Attempt to login and establish a KiteConnect session
 kite = autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key)
 
-# Generating and storing access token - valid till 6 am the next day
-access_token_file = BASE_DIR / 'z_access_token.txt'
-with open(access_token_file, 'w') as file:
-    file.write(kite.access_token)
+if kite is not None:
+    # Successfully established KiteConnect session
+    access_token_file = 'z_access_token.txt'
+    with open(access_token_file, 'w') as file:
+        file.write(kite.access_token)
+    logger.info("Access token stored successfully.")
+else:
+    # Failed to establish KiteConnect session
+    logger.error("Failed to establish KiteConnect session, check the logs for details.")
+
+from datetime import datetime, time
+
+# Current time check function
+def is_time_after_6_05_am() -> bool:
+    now = datetime.now()
+    target_time = time(6, 5)  # 6:05 AM
+    return now.time() > target_time
+
+def get_or_refresh_access_token() -> str:
+    access_token_file_path = '/home/isoula/PycharmProjects/sidhaQ/z_access_token.txt'
+    if is_time_after_6_05_am():
+        # It's after 6:05 AM, try to login and refresh the token
+        kite = autologin(api_key, api_secret, zerodha_id, zerodha_password, totp_key)
+        if kite is not None:
+            # Successfully established KiteConnect session, store new access token
+            with open(access_token_file_path, 'w') as file:
+                file.write(kite.access_token)
+            logger.info("New access token stored successfully.")
+            return kite.access_token
+        else:
+            # Failed to establish KiteConnect session, check the logs for details.
+            logger.error("Failed to establish KiteConnect session, check the logs for details.")
+            # Attempt to read the existing token from file as fallback
+            if access_token_file_path.exists():
+                with open(access_token_file_path, 'r') as file:
+                    return file.read().strip()
+            return None
+    else:
+        # It's before 6:05 AM, try to read the existing token from file
+        if access_token_file_path.exists():
+            with open(access_token_file_path, 'r') as file:
+                return file.read().strip()
+        else:
+            logger.error("Access token file does not exist. A new session needs to be established.")
+            return None
+
+# Use the function to get or refresh the access token
+access_token = get_or_refresh_access_token()
+
+if access_token is not None:
+    # Use the access token for further operations
+    pass
+else:
+    logger.error("Access token could not be retrieved or generated.")
